@@ -4,17 +4,12 @@ import time
 
 app = Flask(__name__)
 
-# Stores the latest data and the last time we heard from the device
+# Stores the latest data sent by ESP devices
 live_data = {}
 
-# Metadata for your patients
-patients_metadata = {
-    1: {"name": "Ravi Kumar", "age": 72, "condition": "Hypertension"},
-    2: {"name": "Anita Sharma", "age": 68, "condition": "Diabetes"},
-    3: {"name": "Joseph Mathew", "age": 75, "condition": "Cardiac Risk"},
-    4: {"name": "Meera Iyer", "age": 70, "condition": "Osteoporosis"},
-    5: {"name": "Suresh Reddy", "age": 74, "condition": "Respiratory Risk"}
-}
+# We keep this to define WHICH IDs we expect to see on the dashboard
+# But we leave the values empty so the ESP fills them in
+expected_ids = [1, 2, 3, 4, 5]
 
 @app.route("/")
 def home():
@@ -26,7 +21,7 @@ def update_sensor_data():
     patient_id = data.get("id")
     
     if patient_id:
-        # Store the current time as a 'timestamp' to track 'last seen'
+        # Store everything sent by ESP: name, age, hr, spo2, bp, temp, battery, fall
         data["last_seen_ts"] = time.time() 
         data["last_sync"] = datetime.datetime.now().strftime("%H:%M:%S")
         live_data[patient_id] = data
@@ -37,17 +32,20 @@ def update_sensor_data():
 def get_dashboard_data():
     combined_results = []
     current_time = time.time()
-    TIMEOUT_SECONDS = 10  # If no data in 10s, consider device offline
+    TIMEOUT_SECONDS = 10 
 
-    for p_id, meta in patients_metadata.items():
-        # Check if we have data AND if that data is fresh
+    for p_id in expected_ids:
+        # Check if we have received data for this ID recently
         if p_id in live_data and (current_time - live_data[p_id]["last_seen_ts"] < TIMEOUT_SECONDS):
-            combined_results.append({**meta, **live_data[p_id]})
+            # Use the data exactly as sent by the ESP
+            combined_results.append(live_data[p_id])
         else:
-            # Revert to -- if nothing is received or device timed out
+            # Revert EVERYTHING to placeholders if no data received
             combined_results.append({
-                **meta, 
-                "id": p_id, 
+                "id": p_id,
+                "name": "---", 
+                "age": "--",
+                "condition": "No Device Linked",
                 "hr": "--", 
                 "spo2": "--", 
                 "bp": "--/--", 
@@ -60,10 +58,10 @@ def get_dashboard_data():
                 "priority": "Disconnected"
             })
     
+    # Sort: Alerts first
     combined_results.sort(key=lambda x: x.get('alert', False), reverse=True)
     return jsonify(combined_results)
 
-# (The html_page string remains the same as your previous working version)
 html_page = """
 <!DOCTYPE html>
 <html>
@@ -94,10 +92,10 @@ function loadData() {
             html += `
             <div class="card ${isAlert ? 'alert-border' : ''}">
                 <div style="display:flex; justify-content:space-between;">
-                    <h2>${p.name} (Age ${p.age})</h2>
+                    <h2>${p.name} (Age: ${p.age})</h2>
                     <span class="${isAlert ? 'critical' : 'normal'}">${isAlert ? '⚠ ' + p.priority : '● ' + p.priority}</span>
                 </div>
-                <p>Condition: ${p.condition}</p>
+                <p>Condition: ${p.condition || 'Unknown'}</p>
                 <div class="row">
                     <div class="field">❤️ HR: ${p.hr} BPM</div>
                     <div class="field">🫁 SpO₂: ${p.spo2}%</div>
