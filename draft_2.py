@@ -4,12 +4,9 @@ import time
 
 app = Flask(__name__)
 
-# Stores the latest data sent by ESP devices
+# This dictionary stores data for every ESP that connects
+# Format: { id: {name, age, hr, spo2, ..., last_seen_ts} }
 live_data = {}
-
-# We keep this to define WHICH IDs we expect to see on the dashboard
-# But we leave the values empty so the ESP fills them in
-expected_ids = [1, 2, 3, 4, 5]
 
 @app.route("/")
 def home():
@@ -18,105 +15,97 @@ def home():
 @app.route("/api/update", methods=["POST"])
 def update_sensor_data():
     data = request.json
-    patient_id = data.get("id")
+    p_id = data.get("id")
     
-    if patient_id:
-        # Store everything sent by ESP: name, age, hr, spo2, bp, temp, battery, fall
-        data["last_seen_ts"] = time.time() 
+    if p_id:
+        # Add server-side tracking info
+        data["last_seen_ts"] = time.time()
         data["last_sync"] = datetime.datetime.now().strftime("%H:%M:%S")
-        live_data[patient_id] = data
+        live_data[p_id] = data
         return jsonify({"status": "success"}), 200
     return jsonify({"status": "error", "message": "No ID provided"}), 400
 
 @app.route("/api/data")
 def get_dashboard_data():
-    combined_results = []
     current_time = time.time()
-    TIMEOUT_SECONDS = 10 
+    TIMEOUT_SECONDS = 12 
+    display_list = []
 
-    for p_id in expected_ids:
-        # Check if we have received data for this ID recently
-        if p_id in live_data and (current_time - live_data[p_id]["last_seen_ts"] < TIMEOUT_SECONDS):
-            # Use the data exactly as sent by the ESP
-            combined_results.append(live_data[p_id])
-        else:
-            # Revert EVERYTHING to placeholders if no data received
-            combined_results.append({
-                "id": p_id,
-                "name": "---", 
-                "age": "--",
-                "condition": "No Device Linked",
-                "hr": "--", 
-                "spo2": "--", 
-                "bp": "--/--", 
-                "temp": "--", 
-                "battery": "--", 
-                "fall": False, 
-                "location": "Offline", 
-                "last_sync": "No Signal", 
-                "alert": False, 
-                "priority": "Disconnected"
+    for p_id, p_info in live_data.items():
+        # If the device hasn't checked in recently, reset its stats
+        if (current_time - p_info["last_seen_ts"] > TIMEOUT_SECONDS):
+            p_info.update({
+                "hr": "--", "spo2": "--", "bp": "--/--", "temp": "--",
+                "battery": "--", "fall": False, "priority": "Disconnected",
+                "alert": False, "last_sync": "Timed Out"
             })
+        display_list.append(p_info)
     
-    # Sort: Alerts first
-    combined_results.sort(key=lambda x: x.get('alert', False), reverse=True)
-    return jsonify(combined_results)
+    # Sort: Critical Alerts at the top, then alphabetically by name
+    display_list.sort(key=lambda x: (not x.get('alert', False), x.get('name', '')))
+    return jsonify(display_list)
 
 html_page = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>DASN Community Monitoring</title>
+    <title>DASN Global Monitoring</title>
     <meta charset="UTF-8">
     <style>
-        body { margin: 0; font-family: Arial; background: #0f172a; color: white; }
-        header { padding: 20px; text-align: center; background: #1e293b; font-size: 24px; font-weight: bold; border-bottom: 3px solid #334155; }
-        .container { padding: 20px; }
-        .card { background: #1e293b; padding: 20px; border-radius: 10px; margin-bottom: 20px; border-left: 5px solid #334155; transition: 0.3s; }
-        .alert-border { border-left: 5px solid #ef4444; background: #2d1b1b; }
-        .row { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 15px; }
-        .field { flex: 1 1 180px; background: #0f172a; padding: 10px; border-radius: 5px; }
-        .normal { color: #22c55e; }
-        .critical { color: #ef4444; font-weight: bold; }
+        body { margin: 0; font-family: 'Segoe UI', Arial; background: #0f172a; color: white; }
+        header { padding: 20px; text-align: center; background: #1e293b; font-size: 26px; font-weight: bold; border-bottom: 4px solid #3b82f6; }
+        .container { padding: 20px; display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px; }
+        .card { background: #1e293b; padding: 20px; border-radius: 12px; border-left: 6px solid #475569; transition: all 0.3s ease; }
+        .alert-active { border-left-color: #ef4444; background: #451a1a; transform: scale(1.02); }
+        .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; }
+        .field { background: #0f172a; padding: 12px; border-radius: 8px; font-size: 0.9em; }
+        .status-badge { padding: 4px 12px; border-radius: 20px; font-size: 0.8em; font-weight: bold; }
+        .bg-normal { background: #065f46; color: #34d399; }
+        .bg-critical { background: #7f1d1d; color: #fca5a5; }
     </style>
 </head>
 <body>
-<header>DASN – Community Health Monitoring Command Center</header>
+<header>DASN – Multi-Patient Health Command Center</header>
 <div class="container" id="dashboard"></div>
 <script>
-function loadData() {
+function updateUI() {
     fetch('/api/data').then(res => res.json()).then(data => {
         let html = "";
+        if (data.length === 0) {
+            html = "<h3 style='text-align:center; width:100%; color:#64748b;'>Waiting for device connections...</h3>";
+        }
         data.forEach(p => {
             const isAlert = p.alert === true;
             html += `
-            <div class="card ${isAlert ? 'alert-border' : ''}">
-                <div style="display:flex; justify-content:space-between;">
-                    <h2>${p.name} (Age: ${p.age})</h2>
-                    <span class="${isAlert ? 'critical' : 'normal'}">${isAlert ? '⚠ ' + p.priority : '● ' + p.priority}</span>
+            <div class="card ${isAlert ? 'alert-active' : ''}">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h2 style="margin:0;">${p.name || 'Unknown'}</h2>
+                    <span class="status-badge ${isAlert ? 'bg-critical' : 'bg-normal'}">
+                        ${isAlert ? '⚠ ' + p.priority : '● ' + p.priority}
+                    </span>
                 </div>
-                <p>Condition: ${p.condition || 'Unknown'}</p>
+                <div style="color:#94a3b8; margin-bottom:10px;">ID: ${p.id} | Age: ${p.age || '--'} | ${p.condition || 'No Data'}</div>
                 <div class="row">
-                    <div class="field">❤️ HR: ${p.hr} BPM</div>
-                    <div class="field">🫁 SpO₂: ${p.spo2}%</div>
-                    <div class="field">🩸 BP: ${p.bp}</div>
-                    <div class="field">🌡 Temp: ${p.temp}°C</div>
-                    <div class="field">🔋 Battery: ${p.battery}%</div>
-                    <div class="field">📍 Location: ${p.location}</div>
-                    <div class="field">⏱ Last Sync: ${p.last_sync}</div>
-                    <div class="field">🚶 Fall: ${p.fall ? "YES" : "NO"}</div>
+                    <div class="field">❤️ HR: <b>${p.hr}</b></div>
+                    <div class="field">🫁 SpO₂: <b>${p.spo2}%</b></div>
+                    <div class="field">🩸 BP: <b>${p.bp}</b></div>
+                    <div class="field">🌡 Temp: <b>${p.temp}°C</b></div>
+                    <div class="field">🔋 Bat: <b>${p.battery}%</b></div>
+                    <div class="field">📍 Loc: <b>${p.location}</b></div>
+                    <div class="field">🚶 Fall: <b>${p.fall ? "YES" : "NO"}</b></div>
+                    <div class="field">⏱ Sync: <b>${p.last_sync}</b></div>
                 </div>
             </div>`;
         });
         document.getElementById("dashboard").innerHTML = html;
     });
 }
-setInterval(loadData, 2000);
-loadData();
+setInterval(updateUI, 2000);
+updateUI();
 </script>
 </body>
 </html>
 """
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000)
