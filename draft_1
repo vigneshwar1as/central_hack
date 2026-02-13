@@ -1,0 +1,160 @@
+from flask import Flask, render_template_string, jsonify
+import random
+import datetime
+
+app = Flask(__name__)
+
+patients = [
+    {"id": 1, "name": "Ravi Kumar", "age": 72, "condition": "Hypertension"},
+    {"id": 2, "name": "Anita Sharma", "age": 68, "condition": "Diabetes"},
+    {"id": 3, "name": "Joseph Mathew", "age": 75, "condition": "Cardiac Risk"},
+    {"id": 4, "name": "Meera Iyer", "age": 70, "condition": "Osteoporosis"},
+    {"id": 5, "name": "Suresh Reddy", "age": 74, "condition": "Respiratory Risk"}
+]
+
+def generate_patient_data(patient):
+    hr = random.randint(55, 130)
+    spo2 = random.randint(85, 100)
+    systolic = random.randint(100, 160)
+    diastolic = random.randint(60, 100)
+    temp = round(random.uniform(36.0, 39.5), 1)
+    battery = random.randint(30, 100)
+    fall = random.choice([False, False, False, True])
+    location = random.choice(["Sector A", "Sector B", "Sector C", "Outdoor Zone"])
+
+    alert = False
+    priority = "Normal"
+
+    if hr < 60 or hr > 110:
+        alert = True
+        priority = "High"
+    if spo2 < 90:
+        alert = True
+        priority = "Critical"
+    if fall:
+        alert = True
+        priority = "Emergency"
+
+    return {
+        "id": patient["id"],
+        "name": patient["name"],
+        "age": patient["age"],
+        "condition": patient["condition"],
+        "hr": hr,
+        "spo2": spo2,
+        "bp": f"{systolic}/{diastolic}",
+        "temp": temp,
+        "battery": battery,
+        "fall": fall,
+        "location": location,
+        "last_sync": datetime.datetime.now().strftime("%H:%M:%S"),
+        "alert": alert,
+        "priority": priority
+    }
+
+@app.route("/")
+def home():
+    return render_template_string(html_page)
+
+@app.route("/api/data")
+def data():
+    return jsonify([generate_patient_data(p) for p in patients])
+
+html_page = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>DASN Community Monitoring</title>
+    <meta charset="UTF-8">
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial;
+            background: #0f172a;
+            color: white;
+        }
+
+        header {
+            padding: 20px;
+            text-align: center;
+            background: #1e293b;
+            font-size: 24px;
+            font-weight: bold;
+        }
+
+        .container {
+            padding: 20px;
+        }
+
+        .card {
+            background: #1e293b;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+
+        .row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+
+        .field {
+            flex: 1 1 200px;
+        }
+
+        .normal { color: #22c55e; }
+        .high { color: orange; }
+        .critical { color: red; }
+
+    </style>
+</head>
+<body>
+
+<header>
+    DASN – Community Health Monitoring Command Center
+</header>
+
+<div class="container" id="dashboard"></div>
+
+<script>
+function loadData() {
+    fetch('/api/data')
+        .then(res => res.json())
+        .then(data => {
+            let html = "";
+            data.forEach(p => {
+                html += `
+                <div class="card">
+                    <h2>${p.name} (Age ${p.age})</h2>
+                    <p>Condition: ${p.condition}</p>
+                    <div class="row">
+                        <div class="field">❤️ HR: ${p.hr} BPM</div>
+                        <div class="field">🫁 SpO₂: ${p.spo2}%</div>
+                        <div class="field">🩸 BP: ${p.bp}</div>
+                        <div class="field">🌡 Temp: ${p.temp}°C</div>
+                        <div class="field">🔋 Battery: ${p.battery}%</div>
+                        <div class="field">📍 Location: ${p.location}</div>
+                        <div class="field">⏱ Last Sync: ${p.last_sync}</div>
+                        <div class="field">🚶 Fall: ${p.fall ? "YES" : "NO"}</div>
+                    </div>
+                    <h3 class="${p.alert ? 'critical' : 'normal'}">
+                        ${p.alert ? "⚠ ALERT - " + p.priority : "System Stable"}
+                    </h3>
+                </div>
+                `;
+            });
+            document.getElementById("dashboard").innerHTML = html;
+        });
+}
+
+setInterval(loadData, 3000);
+loadData();
+</script>
+
+</body>
+</html>
+"""
+
+if __name__ == "__main__":
+    app.run(debug=True)
